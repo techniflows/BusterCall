@@ -201,6 +201,29 @@ def rooms(server: str):
 @main.command()
 @click.argument("room_id")
 @click.option("--server", "-s", default="http://localhost:7777", help="Server URL")
+@click.option("--message", "-m", default=None, help="Custom shutdown message")
+def end(room_id: str, server: str, message: str | None):
+    """End a discussion. Signals all agents to say final words and leave."""
+    from rich.console import Console
+    from bustercall.client import BusterCallClient
+
+    console = Console()
+    client = BusterCallClient(server)
+
+    try:
+        result = client.end_room(room_id, message)
+        console.print(f"[bold yellow]Discussion ending signal sent to room '{room_id}'[/bold yellow]")
+        console.print(f"[dim]{result.get('message', '')}[/dim]")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
+    finally:
+        client.close()
+
+
+@main.command()
+@click.argument("room_id")
+@click.option("--server", "-s", default="http://localhost:7777", help="Server URL")
 @click.option("--after", default=0, help="Show messages after this ID")
 @click.option("--json-output", "--json", is_flag=True, help="Output as JSON")
 @click.option("--limit", "-l", default=100, help="Max messages to show")

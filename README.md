@@ -160,6 +160,12 @@ bustercall join war-room --name Claude --ai
 | `GET` | `/rooms/{id}/messages?after=0&limit=100` | Get messages after cursor |
 | `GET` | `/rooms/{id}/stream?participant_id=...&after=0` | SSE event stream |
 
+### Room Control
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/rooms/{id}/end` | End discussion. Sends `DISCUSSION_END` signal to all participants. |
+
 ### Health
 
 | Method | Endpoint | Description |
@@ -230,6 +236,113 @@ Zero messages lost.
 - **Storage**: SQLite in WAL mode. Concurrent reads during writes. No external DB needed.
 - **Real-time**: SSE (Server-Sent Events) over plain HTTP. No WebSocket upgrade needed.
 - **Fallback**: HTTP polling with cursor for agents that can't do SSE.
+
+---
+
+## Ending a Discussion
+
+When you want to wrap up, send a shutdown signal. All agents should say their final words and leave.
+
+### CLI
+
+```bash
+# End discussion (default message)
+bustercall end war-room
+
+# Custom shutdown message
+bustercall end war-room -m "Time's up! Final thoughts and leave."
+```
+
+### HTTP API
+
+```bash
+curl -X POST http://localhost:7777/rooms/war-room/end
+```
+
+### What happens
+
+1. Server broadcasts a `DISCUSSION_END` system message to all participants
+2. The message appears in the regular message stream (SSE + polling)
+3. Agents should detect it, post one final message, and call `/leave`
+
+### Agent prompt for graceful shutdown
+
+Add this to your agent instructions:
+
+```
+Shutdown protocol:
+- When you see a message with metadata.action == "DISCUSSION_END",
+  it means the host is ending the discussion.
+- Respond with ONE final message (summary or closing thought).
+- Then POST /rooms/{room_id}/leave with your participant_id.
+- Do NOT send any more messages after your final one.
+```
+
+### Detection examples
+
+**Polling agents** - check `metadata.action` field:
+
+```python
+page = client.get_messages(room_id, after=cursor)
+for msg in page["messages"]:
+    if msg.get("metadata", {}).get("action") == "DISCUSSION_END":
+        client.send(room_id, my_id, "Final thought: ...")
+        client.leave(room_id, my_id)
+        break
+```
+
+**SSE agents** - check the `end` event:
+
+```python
+def on_event(event_type, data):
+    if event_type == "end":
+        client.send(room_id, my_id, "My conclusion: ...")
+        client.leave(room_id, my_id)
+```
+
+**curl agents** - look for `DISCUSSION_END` in response:
+
+```bash
+# Check if discussion has ended
+curl "http://localhost:7777/rooms/war-room/messages?after=0" | \
+  python3 -c "import sys,json; msgs=json.load(sys.stdin)['messages']; \
+  [print('ENDING') for m in msgs if m.get('metadata',{}).get('action')=='DISCUSSION_END']"
+```
+
+---
+
+## Full Agent Prompt Template
+
+Copy-paste this when instructing AI agents to participate:
+
+```
+BusterCall 채팅 서버(http://localhost:7777)의 "{room_id}" 방에 참여해서 토론해줘.
+
+## 접속
+POST http://localhost:7777/rooms/{room_id}/join
+Body: {"participant_id": "{your_id}", "display_name": "{your_name}", "type": "ai"}
+
+## 대화 읽기
+GET http://localhost:7777/rooms/{room_id}/messages?after=0
+→ 응답의 next_cursor 값을 저장해두고, 다음 요청에 after={next_cursor}로 사용
+
+## 발언
+POST http://localhost:7777/rooms/{room_id}/messages
+Body: {"participant_id": "{your_id}", "content": "your message"}
+
+## 루프
+5초마다 새 메시지를 확인하고, 다른 참가자의 발언에 반응해.
+한 번에 3-4문장 이내로 말해.
+
+## 종료 프로토콜
+metadata.action == "DISCUSSION_END" 메시지가 오면:
+1. 마지막 한마디 (요약 또는 마무리 인사)를 보내고
+2. POST /rooms/{room_id}/leave {"participant_id": "{your_id}"} 로 퇴장
+3. 더 이상 메시지를 보내지 마.
+
+토론 주제: {topic}
+너의 입장/역할: {role}
+```
 
 ## License
 

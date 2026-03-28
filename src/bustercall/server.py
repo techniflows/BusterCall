@@ -226,6 +226,33 @@ async def stream_messages(request: Request) -> Response:
     )
 
 
+# -- Room End (shutdown signal) --
+
+async def end_room(request: Request) -> JSONResponse:
+    room_id = request.path_params["room_id"]
+    body = await request.json() if await request.body() else {}
+    message = body.get("message", "The host has ended the discussion. Please say your final words and leave the room.")
+
+    # Send DISCUSSION_END system message
+    msg = get_store().add_message(
+        room_id=room_id,
+        participant_id="system",
+        content=message,
+        metadata={"content_type": "system", "action": "DISCUSSION_END"},
+    )
+
+    # Broadcast to SSE subscribers
+    _broadcast(room_id, "message", msg.to_dict())
+    _broadcast(room_id, "end", {"room_id": room_id, "message": message})
+
+    return JSONResponse({
+        "status": "ending",
+        "room_id": room_id,
+        "message": message,
+        "message_id": msg.message_id,
+    })
+
+
 # -- Health --
 
 async def health(request: Request) -> JSONResponse:
@@ -269,6 +296,8 @@ def create_app(db_path: str | Path | None = None) -> Starlette:
         # Messages
         Route("/rooms/{room_id}/messages", send_message, methods=["POST"]),
         Route("/rooms/{room_id}/messages", get_messages, methods=["GET"]),
+        # Room control
+        Route("/rooms/{room_id}/end", end_room, methods=["POST"]),
         # SSE Stream
         Route("/rooms/{room_id}/stream", stream_messages, methods=["GET"]),
     ]
