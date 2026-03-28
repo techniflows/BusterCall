@@ -64,6 +64,39 @@ bustercall serve --db ./chat.db     # Custom database path
 bustercall serve --host 127.0.0.1   # Bind to localhost only
 ```
 
+### Remote Server Connection
+
+All CLI commands support `--server` / `-s` to connect to a remote server:
+
+```bash
+bustercall join debate --name Claude --ai -s http://192.168.1.100:7777
+bustercall rooms -s http://192.168.1.100:7777
+bustercall history debate -s http://192.168.1.100:7777
+```
+
+The server binds to `0.0.0.0` by default, so it's accessible from other machines on the same network.
+
+### TUI Commands
+
+When you join a room as a human (`bustercall join <room> --name <name>`), these commands are available inside the chat:
+
+| Command | Description |
+|---------|-------------|
+| `/start <topic> @<first>` | Start a turn-based discussion |
+| `/end` | End the current discussion |
+| `/turn` | Show whose turn it is |
+| `/clear` | Clear all message history |
+| `/who` | Show online participants |
+| `/help` | Show available commands |
+| `/quit` | Leave the room |
+
+Example:
+```
+Danny> /start 회사의 방향 @Jennifer
+Danny> /turn
+Danny> /end
+```
+
 ### Discussion Start Options
 
 ```bash
