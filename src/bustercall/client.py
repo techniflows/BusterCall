@@ -107,6 +107,11 @@ class BusterCallClient:
         resp.raise_for_status()
         return resp.json()
 
+    def clear_room(self, room_id: str) -> dict:
+        resp = self._http.post(f"{self.server_url}/rooms/{room_id}/clear", json={})
+        resp.raise_for_status()
+        return resp.json()
+
     def end_room(self, room_id: str, message: str | None = None) -> dict:
         body = {}
         if message:

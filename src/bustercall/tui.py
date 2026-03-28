@@ -201,6 +201,14 @@ def run_tui(
                     console.print(f"[red]Failed to start: {e}[/red]")
                 continue
 
+            if user_input.lower() == "/clear":
+                try:
+                    result = client.clear_room(room_id)
+                    console.print(f"[bold yellow]Cleared {result['deleted']} messages.[/bold yellow]")
+                except Exception as e:
+                    console.print(f"[red]Failed to clear: {e}[/red]")
+                continue
+
             if user_input.lower() in ("/end", "/stop"):
                 try:
                     client.end_room(room_id)
@@ -228,6 +236,7 @@ def run_tui(
                     "/start <topic> @<first>  - Start turn-based discussion\n"
                     "/end                     - End discussion\n"
                     "/turn                    - Show current turn\n"
+                    "/clear                   - Clear message history\n"
                     "/who                     - Show online participants\n"
                     "/quit                    - Leave the room\n"
                     "/help                    - Show this help",

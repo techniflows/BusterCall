@@ -421,6 +421,25 @@ async def stream_messages(request: Request) -> Response:
     )
 
 
+# -- Clear room history --
+
+async def clear_room(request: Request) -> JSONResponse:
+    room_id = request.path_params["room_id"]
+    count = get_store().clear_messages(room_id)
+
+    # Reset turn state if active
+    if room_id in _turn_state:
+        del _turn_state[room_id]
+
+    _broadcast(room_id, "clear", {"room_id": room_id, "deleted": count})
+
+    return JSONResponse({
+        "status": "cleared",
+        "room_id": room_id,
+        "deleted": count,
+    })
+
+
 # -- Room End (shutdown signal) --
 
 async def end_room(request: Request) -> JSONResponse:
@@ -499,6 +518,7 @@ def create_app(db_path: str | Path | None = None) -> Starlette:
         # Discussion control
         Route("/rooms/{room_id}/start", start_discussion, methods=["POST"]),
         Route("/rooms/{room_id}/turn", get_turn, methods=["GET"]),
+        Route("/rooms/{room_id}/clear", clear_room, methods=["POST"]),
         Route("/rooms/{room_id}/end", end_room, methods=["POST"]),
         # SSE Stream
         Route("/rooms/{room_id}/stream", stream_messages, methods=["GET"]),

@@ -231,6 +231,27 @@ def start(room_id: str, topic: str, first: str | None, order: str | None, server
 @main.command()
 @click.argument("room_id")
 @click.option("--server", "-s", default="http://localhost:7777", help="Server URL")
+def clear(room_id: str, server: str):
+    """Clear all message history in a room."""
+    from rich.console import Console
+    from bustercall.client import BusterCallClient
+
+    console = Console()
+    client = BusterCallClient(server)
+
+    try:
+        result = client.clear_room(room_id)
+        console.print(f"[bold yellow]Cleared {result['deleted']} messages from '{room_id}'[/bold yellow]")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
+    finally:
+        client.close()
+
+
+@main.command()
+@click.argument("room_id")
+@click.option("--server", "-s", default="http://localhost:7777", help="Server URL")
 @click.option("--message", "-m", default=None, help="Custom shutdown message")
 def end(room_id: str, server: str, message: str | None):
     """End a discussion. Signals all agents to say final words and leave."""

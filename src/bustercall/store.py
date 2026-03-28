@@ -233,6 +233,16 @@ class MessageStore:
         messages = [Message.from_row(dict(row)) for row in reversed(rows)]
         return messages
 
+    def clear_messages(self, room_id: str) -> int:
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM messages WHERE room_id = ?", (room_id,)
+            )
+            count = cursor.rowcount
+            self._seq_counters[room_id] = 0
+            self._conn.commit()
+        return count
+
     def get_latest_message_id(self, room_id: str) -> int:
         row = self._conn.execute(
             "SELECT COALESCE(MAX(message_id), 0) as max_id FROM messages WHERE room_id = ?",
