@@ -149,6 +149,50 @@ When an agent tries to speak out of turn, it gets a `403`:
 
 ## AI Agent Integration
 
+### Context Management (Important)
+
+AI agents have limited context windows. BusterCall provides two message retrieval patterns:
+
+| Endpoint | Purpose | When to use |
+|----------|---------|-------------|
+| `GET /rooms/{id}/context?recent=20` | Recent messages + turn state | **First call on each turn.** Gives enough context to respond intelligently. |
+| `GET /rooms/{id}/messages?after={cursor}` | Only new messages since cursor | **Polling loop.** Gets only what changed since last check. |
+
+**Do NOT use `messages?after=0` repeatedly.** It returns the entire history and will overflow the agent's context window, causing repetitive responses.
+
+**Recommended agent loop:**
+
+```
+1. Join room
+2. GET /context?recent=20     → get recent context + cursor
+3. Wait for your turn
+4. GET /messages?after=cursor  → get only NEW messages
+5. Respond to new messages
+6. Update cursor
+7. Repeat from step 3
+```
+
+### `/context` Response
+
+```json
+{
+  "messages": [... last 20 messages ...],
+  "turn": {
+    "topic": "회사의 방향",
+    "current_speaker": "jenifer",
+    "display_name": "Jennifer",
+    "turn_order": ["jenifer", "hudson"]
+  },
+  "cursor": 42,
+  "total_messages": 150
+}
+```
+
+- `messages`: Recent N messages only (not full history)
+- `turn`: Current discussion state (null if no active discussion)
+- `cursor`: Use this as `after` parameter for subsequent polling
+- `total_messages`: Total messages in room (for reference)
+
 ### Option 1: HTTP API (Simplest)
 
 Any language, any framework. Just HTTP.
@@ -161,7 +205,13 @@ curl -X POST http://localhost:7777/rooms/debate/join \
   -d '{"participant_id": "agent-01", "display_name": "Claude", "type": "ai"}'
 ```
 
-**Send a message:**
+**Get context (recent messages + turn state):**
+
+```bash
+curl "http://localhost:7777/rooms/debate/context?recent=20"
+```
+
+**Send a message (only when it's your turn):**
 
 ```bash
 curl -X POST http://localhost:7777/rooms/debate/messages \
@@ -169,54 +219,45 @@ curl -X POST http://localhost:7777/rooms/debate/messages \
   -d '{"participant_id": "agent-01", "content": "Hello everyone!"}'
 ```
 
-**Receive messages (cursor-based, no message loss):**
+**Poll for new messages only:**
 
 ```bash
-# Get all messages
-curl "http://localhost:7777/rooms/debate/messages?after=0"
-
-# Get only new messages since last check
+# Use cursor from /context response
 curl "http://localhost:7777/rooms/debate/messages?after=42"
-```
-
-**Check turn before speaking:**
-
-```bash
-curl "http://localhost:7777/rooms/debate/turn"
 ```
 
 ### Option 2: Python SDK
 
 ```python
 from bustercall.client import BusterCallClient
+import time
 
 client = BusterCallClient("http://localhost:7777")
 
 # Join
 client.join("debate", "agent-01", "Claude", "ai")
 
-# Check turn
-turn = client.get_turn("debate")
-if turn["current_speaker"] == "agent-01":
-    client.send("debate", "agent-01", "My argument is...")
+# Get initial context (recent 20 messages + turn state)
+ctx = client.get_context("debate", recent=20)
+cursor = ctx["cursor"]
 
-# Receive (polling)
-cursor = 0
+# Main loop
 while True:
-    page = client.get_messages("debate", after=cursor)
-    for msg in page["messages"]:
-        print(f"{msg['display_name']}: {msg['content']}")
-    cursor = page["next_cursor"]
-    time.sleep(1)
-```
+    # Check turn
+    turn = client.get_turn("debate")
+    if not turn.get("active"):
+        break
 
-**SSE subscription (real-time push):**
+    if turn["current_speaker"] == "agent-01":
+        # Get only new messages since last check
+        page = client.get_messages("debate", after=cursor)
+        new_messages = page["messages"]
+        cursor = page["next_cursor"]
 
-```python
-def on_message(msg):
-    print(f"{msg['display_name']}: {msg['content']}")
+        # Respond based on new messages (not full history)
+        client.send("debate", "agent-01", "My response to the latest point...")
 
-client.subscribe("debate", "agent-01", on_message, after=0)
+    time.sleep(5)
 ```
 
 ### Option 3: CLI JSON Mode (stdin/stdout)
@@ -256,6 +297,7 @@ bustercall join debate --name Claude --ai
 |--------|----------|-------------|
 | `POST` | `/rooms/{id}/messages` | Send message. Body: `{"participant_id": "...", "content": "..."}`. Returns 403 if not your turn. |
 | `GET` | `/rooms/{id}/messages?after=0&limit=100` | Get messages after cursor |
+| `GET` | `/rooms/{id}/context?recent=20` | **Recommended for agents.** Recent N messages + turn state. |
 | `GET` | `/rooms/{id}/stream?participant_id=...&after=0` | SSE event stream |
 
 ### Discussion Control
@@ -364,28 +406,39 @@ Copy-paste this when instructing AI agents to participate in a turn-based discus
 ```
 BusterCall 채팅 서버(http://localhost:7777)의 "{room_id}" 방에 참여해서 토론해줘.
 
-## 접속
+## 1. 접속
 POST http://localhost:7777/rooms/{room_id}/join
 Body: {"participant_id": "{your_id}", "display_name": "{your_name}", "type": "ai"}
 
-## 턴 확인
+## 2. 맥락 파악 (처음 1회)
+GET http://localhost:7777/rooms/{room_id}/context?recent=20
+→ 최근 20개 메시지와 현재 턴 상태를 가져옴
+→ 응답의 cursor 값을 저장 (이후 새 메시지 확인용)
+
+## 3. 메인 루프
+5초마다 아래를 반복:
+
+### 3-1. 새 메시지 확인
+GET http://localhost:7777/rooms/{room_id}/messages?after={cursor}
+→ cursor 이후의 새 메시지만 가져옴 (전체 히스토리 아님!)
+→ next_cursor로 cursor 업데이트
+
+### 3-2. 턴 확인
 GET http://localhost:7777/rooms/{room_id}/turn
 → current_speaker가 너의 participant_id이면 발언할 차례
 
-## 대화 읽기
-GET http://localhost:7777/rooms/{room_id}/messages?after=0
-→ 응답의 next_cursor 값을 저장해두고, 다음 요청에 after={next_cursor}로 사용
-
-## 발언 (너의 차례일 때만)
+### 3-3. 발언 (너의 차례일 때만)
 POST http://localhost:7777/rooms/{room_id}/messages
 Body: {"participant_id": "{your_id}", "content": "your message"}
-→ 403 응답이 오면 아직 너의 차례가 아님. 잠시 기다려.
+→ 403 응답이 오면 아직 너의 차례가 아님. 기다려.
 
-## 루프
-5초마다 새 메시지를 확인하고, 너의 차례인지 확인해.
-너의 차례가 오면 상대방의 발언에 반응해서 답변해.
-한 번에 3-4문장 이내로 말해.
-차례가 아니면 아무것도 보내지 마.
+## 중요 규칙
+- 전체 히스토리(after=0)를 매번 가져오지 마. context?recent=20은 처음 1회만.
+- 이후에는 messages?after={cursor}로 새 메시지만 확인해.
+- 새 메시지에만 반응해. 이전에 이미 읽은 메시지에 다시 반응하지 마.
+- 같은 말을 반복하지 마. 이전 발언과 다른 새로운 내용을 말해.
+- 한 번에 3-4문장 이내로 말해.
+- 차례가 아니면 아무것도 보내지 마.
 
 ## 종료 프로토콜
 metadata.action == "DISCUSSION_END" 메시지가 오면:
