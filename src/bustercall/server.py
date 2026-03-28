@@ -295,6 +295,13 @@ async def send_message(request: Request) -> JSONResponse:
                     "current_speaker": current_speaker,
                 }, status_code=403)
 
+    # Auto-tag human messages with from_host
+    all_participants = get_store().list_participants(room_id)
+    for p in all_participants:
+        if p["participant_id"] == participant_id and p.get("type") == "human":
+            metadata["from_host"] = True
+            break
+
     msg = get_store().add_message(
         room_id=room_id,
         participant_id=participant_id,
@@ -358,11 +365,18 @@ async def get_context(request: Request) -> JSONResponse:
             "turn_order": state["turn_order"],
         }
 
+    # Extract host (human) messages that agents should prioritize
+    host_messages = [
+        m.to_dict() for m in messages
+        if m.metadata.get("from_host")
+    ]
+
     # Cursor for incremental polling after this
     cursor = messages[-1].message_id if messages else 0
 
     return JSONResponse({
         "messages": [m.to_dict() for m in messages],
+        "host_messages": host_messages,
         "turn": turn_info,
         "cursor": cursor,
         "total_messages": get_store().get_latest_message_id(room_id),
