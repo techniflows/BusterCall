@@ -200,6 +200,36 @@ def rooms(server: str):
 
 @main.command()
 @click.argument("room_id")
+@click.option("--topic", "-t", required=True, help="Discussion topic")
+@click.option("--first", "-f", default=None, help="Who speaks first (display name or participant ID)")
+@click.option("--order", "-o", default=None, help="Turn order, comma-separated (display names or IDs)")
+@click.option("--server", "-s", default="http://localhost:7777", help="Server URL")
+def start(room_id: str, topic: str, first: str | None, order: str | None, server: str):
+    """Start a turn-based discussion in a room."""
+    from rich.console import Console
+    from bustercall.client import BusterCallClient
+
+    console = Console()
+    client = BusterCallClient(server)
+
+    turn_order = [x.strip() for x in order.split(",")] if order else None
+
+    try:
+        result = client.start_discussion(room_id, topic, first_speaker=first, turn_order=turn_order)
+        console.print(f"[bold green]Discussion started in '{room_id}'[/bold green]")
+        console.print(f"  Topic: [bold]{result['topic']}[/bold]")
+        order_display = " -> ".join(result["turn_order"])
+        console.print(f"  Turn order: {order_display}")
+        console.print(f"  First speaker: [bold cyan]{result['current_speaker']}[/bold cyan]")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
+    finally:
+        client.close()
+
+
+@main.command()
+@click.argument("room_id")
 @click.option("--server", "-s", default="http://localhost:7777", help="Server URL")
 @click.option("--message", "-m", default=None, help="Custom shutdown message")
 def end(room_id: str, server: str, message: str | None):

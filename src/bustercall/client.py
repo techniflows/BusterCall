@@ -86,6 +86,27 @@ class BusterCallClient:
         resp.raise_for_status()
         return resp.json()
 
+    def start_discussion(
+        self,
+        room_id: str,
+        topic: str,
+        first_speaker: str | None = None,
+        turn_order: list[str] | None = None,
+    ) -> dict:
+        body: dict = {"topic": topic}
+        if first_speaker:
+            body["first_speaker"] = first_speaker
+        if turn_order:
+            body["turn_order"] = turn_order
+        resp = self._http.post(f"{self.server_url}/rooms/{room_id}/start", json=body)
+        resp.raise_for_status()
+        return resp.json()
+
+    def get_turn(self, room_id: str) -> dict:
+        resp = self._http.get(f"{self.server_url}/rooms/{room_id}/turn")
+        resp.raise_for_status()
+        return resp.json()
+
     def end_room(self, room_id: str, message: str | None = None) -> dict:
         body = {}
         if message:

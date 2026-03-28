@@ -21,6 +21,7 @@ logger = logging.getLogger("bustercall")
 # Global state
 _store: MessageStore | None = None
 _subscribers: dict[str, list[asyncio.Queue]] = {}  # room_id -> list of queues
+_turn_state: dict[str, dict] = {}  # room_id -> turn tracking state
 
 
 def get_store() -> MessageStore:
@@ -132,6 +133,132 @@ async def list_participants(request: Request) -> JSONResponse:
     return JSONResponse(participants)
 
 
+# -- Discussion start (turn-based) --
+
+async def start_discussion(request: Request) -> JSONResponse:
+    room_id = request.path_params["room_id"]
+    body = await request.json()
+    topic = body.get("topic", "")
+    first_speaker = body.get("first_speaker")
+    turn_order = body.get("turn_order", [])
+
+    if not topic:
+        return JSONResponse({"error": "topic is required"}, status_code=400)
+
+    # Auto-build turn_order from online AI participants if not provided
+    if not turn_order:
+        participants = get_store().list_participants(room_id)
+        turn_order = [
+            p["participant_id"] for p in participants
+            if p.get("online") and p.get("type") == "ai" and p["participant_id"] != "system"
+        ]
+
+    if not turn_order:
+        return JSONResponse({"error": "No AI participants in room"}, status_code=400)
+
+    # If first_speaker is a display_name, resolve to participant_id
+    if first_speaker:
+        participants = get_store().list_participants(room_id)
+        for p in participants:
+            if p["display_name"] == first_speaker or p["participant_id"] == first_speaker:
+                first_speaker = p["participant_id"]
+                break
+        # Reorder turn_order so first_speaker is first
+        if first_speaker in turn_order:
+            idx = turn_order.index(first_speaker)
+            turn_order = turn_order[idx:] + turn_order[:idx]
+        else:
+            return JSONResponse(
+                {"error": f"first_speaker '{first_speaker}' not found in turn_order"},
+                status_code=400,
+            )
+
+    # Set turn state
+    _turn_state[room_id] = {
+        "active": True,
+        "topic": topic,
+        "turn_order": turn_order,
+        "current_index": 0,
+    }
+
+    current_speaker = turn_order[0]
+
+    # Resolve display names for the announcement
+    participants = get_store().list_participants(room_id)
+    name_map = {p["participant_id"]: p["display_name"] for p in participants}
+    speaker_name = name_map.get(current_speaker, current_speaker)
+    order_names = [name_map.get(pid, pid) for pid in turn_order]
+
+    # Broadcast start message
+    start_content = f"Discussion started!\nTopic: {topic}\nTurn order: {' → '.join(order_names)}\n@{speaker_name}, you go first."
+    msg = get_store().add_message(
+        room_id=room_id,
+        participant_id="system",
+        content=start_content,
+        metadata={
+            "content_type": "system",
+            "action": "DISCUSSION_START",
+            "topic": topic,
+            "turn_order": turn_order,
+            "current_speaker": current_speaker,
+        },
+    )
+    _broadcast(room_id, "message", msg.to_dict())
+    _broadcast(room_id, "turn", {
+        "current_speaker": current_speaker,
+        "display_name": speaker_name,
+        "turn_order": turn_order,
+        "topic": topic,
+    })
+
+    return JSONResponse({
+        "status": "started",
+        "room_id": room_id,
+        "topic": topic,
+        "turn_order": turn_order,
+        "current_speaker": current_speaker,
+    })
+
+
+async def get_turn(request: Request) -> JSONResponse:
+    room_id = request.path_params["room_id"]
+    state = _turn_state.get(room_id)
+    if not state or not state["active"]:
+        return JSONResponse({"active": False, "message": "No active discussion"})
+
+    current_speaker = state["turn_order"][state["current_index"]]
+    participants = get_store().list_participants(room_id)
+    name_map = {p["participant_id"]: p["display_name"] for p in participants}
+
+    return JSONResponse({
+        "active": True,
+        "topic": state["topic"],
+        "current_speaker": current_speaker,
+        "display_name": name_map.get(current_speaker, current_speaker),
+        "turn_order": state["turn_order"],
+        "turn_index": state["current_index"],
+    })
+
+
+def _advance_turn(room_id: str) -> str | None:
+    state = _turn_state.get(room_id)
+    if not state or not state["active"]:
+        return None
+    state["current_index"] = (state["current_index"] + 1) % len(state["turn_order"])
+    next_speaker = state["turn_order"][state["current_index"]]
+
+    participants = get_store().list_participants(room_id)
+    name_map = {p["participant_id"]: p["display_name"] for p in participants}
+
+    _broadcast(room_id, "turn", {
+        "current_speaker": next_speaker,
+        "display_name": name_map.get(next_speaker, next_speaker),
+        "turn_order": state["turn_order"],
+        "topic": state["topic"],
+    })
+    return next_speaker
+
+
 # -- Message endpoints --
 
 async def send_message(request: Request) -> JSONResponse:
@@ -146,6 +273,28 @@ async def send_message(request: Request) -> JSONResponse:
             {"error": "participant_id and content are required"}, status_code=400
         )
 
+    # Turn-based enforcement: check if it's this participant's turn
+    state = _turn_state.get(room_id)
+    if state and state["active"] and participant_id != "system":
+        # Humans (host) can always speak
+        participants = get_store().list_participants(room_id)
+        ptype = "ai"
+        for p in participants:
+            if p["participant_id"] == participant_id:
+                ptype = p.get("type", "ai")
+                break
+
+        if ptype == "ai" and participant_id in state["turn_order"]:
+            current_speaker = state["turn_order"][state["current_index"]]
+            if participant_id != current_speaker:
+                # Resolve names for error message
+                name_map = {p["participant_id"]: p["display_name"] for p in participants}
+                return JSONResponse({
+                    "error": "not_your_turn",
+                    "message": f"It's {name_map.get(current_speaker, current_speaker)}'s turn. Please wait.",
+                    "current_speaker": current_speaker,
+                }, status_code=403)
+
     msg = get_store().add_message(
         room_id=room_id,
         participant_id=participant_id,
@@ -159,10 +308,20 @@ async def send_message(request: Request) -> JSONResponse:
     # Update heartbeat
     get_store().update_heartbeat(room_id, participant_id)
 
-    return JSONResponse(
-        {"message_id": msg.message_id, "timestamp": msg.timestamp, "sequence": msg.sequence},
-        status_code=201,
-    )
+    # Advance turn if this was a turn-order participant
+    next_speaker = None
+    if state and state["active"] and participant_id in state.get("turn_order", []):
+        next_speaker = _advance_turn(room_id)
+
+    result = {
+        "message_id": msg.message_id,
+        "timestamp": msg.timestamp,
+        "sequence": msg.sequence,
+    }
+    if next_speaker:
+        result["next_speaker"] = next_speaker
+
+    return JSONResponse(result, status_code=201)
 
 
 async def get_messages(request: Request) -> JSONResponse:
@@ -233,6 +392,10 @@ async def end_room(request: Request) -> JSONResponse:
     body = await request.json() if await request.body() else {}
     message = body.get("message", "The host has ended the discussion. Please say your final words and leave the room.")
 
+    # Deactivate turn state
+    if room_id in _turn_state:
+        _turn_state[room_id]["active"] = False
+
     # Send DISCUSSION_END system message
     msg = get_store().add_message(
         room_id=room_id,
@@ -296,7 +459,9 @@ def create_app(db_path: str | Path | None = None) -> Starlette:
         # Messages
         Route("/rooms/{room_id}/messages", send_message, methods=["POST"]),
         Route("/rooms/{room_id}/messages", get_messages, methods=["GET"]),
-        # Room control
+        # Discussion control
+        Route("/rooms/{room_id}/start", start_discussion, methods=["POST"]),
+        Route("/rooms/{room_id}/turn", get_turn, methods=["GET"]),
         Route("/rooms/{room_id}/end", end_room, methods=["POST"]),
         # SSE Stream
         Route("/rooms/{room_id}/stream", stream_messages, methods=["GET"]),
