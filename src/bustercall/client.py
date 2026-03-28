@@ -135,6 +135,14 @@ class BusterCallClient:
         resp.raise_for_status()
         return resp.json()
 
+    def get_context(self, room_id: str, recent: int = 20) -> dict:
+        resp = self._http.get(
+            f"{self.server_url}/rooms/{room_id}/context",
+            params={"recent": recent},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     def get_messages(self, room_id: str, after: int = 0, limit: int = 100) -> dict:
         resp = self._http.get(
             f"{self.server_url}/rooms/{room_id}/messages",

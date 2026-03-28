@@ -333,6 +333,42 @@ async def get_messages(request: Request) -> JSONResponse:
     return JSONResponse(page.to_dict())
 
 
+async def get_context(request: Request) -> JSONResponse:
+    """Return recent messages + turn state for AI agent context building.
+
+    Designed to give agents just enough context to respond intelligently
+    without flooding their context window with full history.
+    """
+    room_id = request.path_params["room_id"]
+    recent = min(int(request.query_params.get("recent", "20")), 100)
+
+    messages = get_store().get_recent_messages(room_id, limit=recent)
+
+    # Include turn state
+    state = _turn_state.get(room_id)
+    turn_info = None
+    if state and state["active"]:
+        current_speaker = state["turn_order"][state["current_index"]]
+        participants = get_store().list_participants(room_id)
+        name_map = {p["participant_id"]: p["display_name"] for p in participants}
+        turn_info = {
+            "topic": state["topic"],
+            "current_speaker": current_speaker,
+            "display_name": name_map.get(current_speaker, current_speaker),
+            "turn_order": state["turn_order"],
+        }
+
+    # Cursor for incremental polling after this
+    cursor = messages[-1].message_id if messages else 0
+
+    return JSONResponse({
+        "messages": [m.to_dict() for m in messages],
+        "turn": turn_info,
+        "cursor": cursor,
+        "total_messages": get_store().get_latest_message_id(room_id),
+    })
+
+
 # -- SSE Stream --
 
 async def stream_messages(request: Request) -> Response:
@@ -459,6 +495,7 @@ def create_app(db_path: str | Path | None = None) -> Starlette:
         # Messages
         Route("/rooms/{room_id}/messages", send_message, methods=["POST"]),
         Route("/rooms/{room_id}/messages", get_messages, methods=["GET"]),
+        Route("/rooms/{room_id}/context", get_context, methods=["GET"]),
         # Discussion control
         Route("/rooms/{room_id}/start", start_discussion, methods=["POST"]),
         Route("/rooms/{room_id}/turn", get_turn, methods=["GET"]),

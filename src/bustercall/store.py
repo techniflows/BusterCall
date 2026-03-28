@@ -220,6 +220,19 @@ class MessageStore:
 
         return MessagePage(messages=messages, next_cursor=next_cursor, has_more=has_more)
 
+    def get_recent_messages(self, room_id: str, limit: int = 20) -> list[Message]:
+        rows = self._conn.execute(
+            """SELECT m.*, p.display_name, p.type as participant_type
+               FROM messages m
+               LEFT JOIN participants p ON m.participant_id = p.participant_id AND m.room_id = p.room_id
+               WHERE m.room_id = ?
+               ORDER BY m.message_id DESC
+               LIMIT ?""",
+            (room_id, limit),
+        ).fetchall()
+        messages = [Message.from_row(dict(row)) for row in reversed(rows)]
+        return messages
+
     def get_latest_message_id(self, room_id: str) -> int:
         row = self._conn.execute(
             "SELECT COALESCE(MAX(message_id), 0) as max_id FROM messages WHERE room_id = ?",
