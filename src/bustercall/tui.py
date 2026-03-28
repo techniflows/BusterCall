@@ -184,6 +184,9 @@ def run_tui(
                     idx = parts.index("@")
                     topic = parts[:idx].strip()
                     first_speaker = parts[idx + 1:].strip()
+                # Strip surrounding quotes from topic
+                if topic and topic[0] in ("'", '"') and topic[-1] == topic[0]:
+                    topic = topic[1:-1]
                 if not topic:
                     console.print("[red]Usage: /start <topic> @<first_speaker>[/red]")
                     continue
