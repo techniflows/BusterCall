@@ -174,11 +174,60 @@ def run_tui(
                     console.print(f"[red]Error: {e}[/red]")
                 continue
 
+            if user_input.lower().startswith("/start "):
+                # /start <topic> @<first_speaker>
+                parts = user_input[7:].strip()
+                topic = parts
+                first_speaker = None
+                # Extract @mention
+                if "@" in parts:
+                    idx = parts.index("@")
+                    topic = parts[:idx].strip()
+                    first_speaker = parts[idx + 1:].strip()
+                if not topic:
+                    console.print("[red]Usage: /start <topic> @<first_speaker>[/red]")
+                    continue
+                try:
+                    result = client.start_discussion(room_id, topic, first_speaker=first_speaker)
+                    order_display = " -> ".join(result["turn_order"])
+                    console.print(f"\n[bold green]Discussion started![/bold green]")
+                    console.print(f"  Topic: [bold]{result['topic']}[/bold]")
+                    console.print(f"  Order: {order_display}")
+                    console.print(f"  First: [bold cyan]{result['current_speaker']}[/bold cyan]\n")
+                except Exception as e:
+                    console.print(f"[red]Failed to start: {e}[/red]")
+                continue
+
+            if user_input.lower() in ("/end", "/stop"):
+                try:
+                    client.end_room(room_id)
+                    console.print("[bold yellow]Discussion ended.[/bold yellow]")
+                except Exception as e:
+                    console.print(f"[red]Failed to end: {e}[/red]")
+                continue
+
+            if user_input.lower() == "/turn":
+                try:
+                    turn = client.get_turn(room_id)
+                    if turn.get("active"):
+                        console.print(f"\n[bold]Topic:[/bold] {turn.get('topic', '')}")
+                        console.print(f"[bold]Current speaker:[/bold] [cyan]{turn.get('display_name', '?')}[/cyan]")
+                        order = " -> ".join(turn.get("turn_order", []))
+                        console.print(f"[bold]Order:[/bold] {order}\n")
+                    else:
+                        console.print("[dim]No active discussion.[/dim]")
+                except Exception as e:
+                    console.print(f"[red]Error: {e}[/red]")
+                continue
+
             if user_input.lower() == "/help":
                 console.print(Panel(
-                    "/quit  - Leave the room\n"
-                    "/who   - Show online participants\n"
-                    "/help  - Show this help",
+                    "/start <topic> @<first>  - Start turn-based discussion\n"
+                    "/end                     - End discussion\n"
+                    "/turn                    - Show current turn\n"
+                    "/who                     - Show online participants\n"
+                    "/quit                    - Leave the room\n"
+                    "/help                    - Show this help",
                     title="Commands",
                     border_style="dim",
                 ))
